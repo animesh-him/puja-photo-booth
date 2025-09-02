@@ -4,7 +4,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Puja Photo Booth — Couple / Shiv / Durga</title>
 <style>
-  :root{--bg:#0f1020;--panel:#17192e;--muted:#9aa3b2;--text:#f2f5f7;--accent:#ffb703;--ok:#0ea5e9}
+  :root{--bg:#0f1020;--panel:#17192e;--muted:#9aa3b2;--text:#f2f5f7;--accent:#ffb703;--ok:#0ea5e9;--warn:#ef4444}
   *{box-sizing:border-box}
   body{margin:0;background:linear-gradient(180deg,#0c0d1a,#12142a 60%,#0c0d1a);color:var(--text);
        font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu}
@@ -16,9 +16,7 @@
   .card{background:#17192e;border:1px solid #232642;border-radius:16px;padding:14px}
   .stack{display:flex;flex-direction:column;gap:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  input[type=file],select,button,input[type=range]{
-    background:#243046;color:#e9eef8;border:1px solid #2a3450;border-radius:10px;padding:10px 12px
-  }
+  input[type=file],select,button,input[type=range]{background:#243046;color:#e9eef8;border:1px solid #2a3450;border-radius:10px;padding:10px 12px}
   button{cursor:pointer} button:hover{filter:brightness(.95)}
   .btn-accent{background:var(--ok);border-color:#0a84c2;color:#00131e;font-weight:600}
   .note{font-size:12px;color:var(--muted)}
@@ -28,6 +26,8 @@
   .opt{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
   .opt button{flex:1 1 140px;padding:12px;border-radius:12px;border:1px solid #2b4066;background:#132448}
   .opt button span{display:block;font-size:12px;color:#bcd7ff}
+  #status{margin:10px 0;padding:10px;border-radius:10px;background:#1b2236;border:1px solid #2b3a5e;color:#cfe1ff;display:none}
+  #status.warn{background:#3a1b1b;border-color:#5e2b2b;color:#ffd3d3}
   @media (max-width:980px){.grid{grid-template-columns:1fr}}
 </style>
 
@@ -37,6 +37,8 @@
     <span class="tag">No-Server • No-Storage</span>
     <h1>Puja Photo Booth</h1>
   </header>
+
+  <div id="status" role="status" aria-live="polite"></div>
 
   <div class="grid">
     <div class="card stack">
@@ -54,6 +56,7 @@
         <button id="chooseShiv">Single (Shiv)</button>
         <button id="chooseDurga">Single (Durga)</button>
       </div>
+      <div class="note">Place your PNGs in <code>assets/</code> as <code>overlay-couple.png</code>, <code>overlay-shiv.png</code>, <code>overlay-durga.png</code>.</div>
 
       <h3>Position</h3>
       <div class="row">
@@ -71,7 +74,7 @@
         </select>
         <button id="snap" class="btn-accent">Capture & Download</button>
       </div>
-      <div class="note">Tip: Drag to move, wheel/pinch to zoom. All processing is local.</div>
+      <div class="note">Drag to move; wheel/pinch to zoom. All processing is local.</div>
     </div>
 
     <div class="card">
@@ -81,6 +84,7 @@
   </div>
 </div>
 
+<!-- Mode chooser -->
 <div id="modeModal" class="modal" role="dialog" aria-modal="true" aria-label="Choose mode">
   <div class="box">
     <h2 style="margin:0 0 6px 0">Who is in the photo?</h2>
@@ -93,7 +97,7 @@
   </div>
 </div>
 
-<video id="video" autoplay playsinline style="display:none"></video>
+<video id="video" autoplay playsinline muted style="display:none"></video>
 
 <script>
 (() => {
@@ -115,6 +119,7 @@
     modeCouple: document.getElementById('modeCouple'),
     modeShiv: document.getElementById('modeShiv'),
     modeDurga: document.getElementById('modeDurga'),
+    status: document.getElementById('status'),
   };
 
   let stream = null;
@@ -123,8 +128,14 @@
   let usingVideo = false;
 
   const FOOTER_TEXT = "Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in";
-
   let tx=0, ty=0, zoom=1, rotation=0;
+
+  function setStatus(msg, warn=false){
+    els.status.textContent = msg;
+    els.status.className = warn ? 'warn' : '';
+    els.status.style.display = msg ? 'block' : 'none';
+  }
+
   function setCanvasAspect(aspect){
     const cssW=960, cssH=Math.round(cssW/aspect);
     const dpr=window.devicePixelRatio||1;
@@ -135,121 +146,163 @@
     els.ctx.setTransform(dpr,0,0,dpr,0,0);
   }
   setCanvasAspect(parseFloat(els.ratio.value));
-  els.ratio.addEventListener('change', ()=> setCanvasAspect(parseFloat(els.ratio.value)));
+  els.ratio.addEventListener('change', () => setCanvasAspect(parseFloat(els.ratio.value)));
 
   function blobToImage(blob){
     return new Promise((resolve,reject)=>{
-      const url=URL.createObjectURL(blob);
-      const img=new Image();
-      img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
-      img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('img load'))};
-      img.src=url;
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+      img.src = url;
     });
   }
   function loadImageFromFile(file){
     return new Promise((resolve,reject)=>{
       if(!file) return reject(new Error('no file'));
-      const url=URL.createObjectURL(file);
-      const img=new Image();
-      img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
-      img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('load fail'))};
-      img.src=url;
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('load fail')); };
+      img.src = url;
     });
   }
-  async function preloadOverlay(name){
+  async function preloadOverlay(path){
     try{
-      const res=await fetch('assets/'+name,{cache:'no-store'});
+      const res = await fetch('assets/'+path, {cache:'no-store'});
       if(!res.ok) throw new Error('not found');
-      const blob=await res.blob();
-      overlayImage=await blobToImage(blob);
+      const blob = await res.blob();
+      overlayImage = await blobToImage(blob);
       hideModal();
-    }catch(_){/* ok if missing */}
+      setStatus("Overlay loaded: "+path);
+    }catch(e){
+      overlayImage = null;
+      setStatus("Overlay '"+path+"' not found in assets/. You can still upload a photo and capture.", true);
+    }
   }
 
-  function showModal(){els.modeModal.style.display='flex'}
-  function hideModal(){els.modeModal.style.display='none'}
+  function showModal(){ els.modeModal.style.display='flex'; }
+  function hideModal(){ els.modeModal.style.display='none'; }
 
   showModal();
   preloadOverlay('overlay-couple.png');
 
-  function choose(name){preloadOverlay(name)}
-  els.modeCouple.onclick=()=>choose('overlay-couple.png');
-  els.modeShiv.onclick=()=>choose('overlay-shiv.png');
-  els.modeDurga.onclick=()=>choose('overlay-durga.png');
-  els.chooseCouple.onclick=()=>choose('overlay-couple.png');
-  els.chooseShiv.onclick=()=>choose('overlay-shiv.png');
-  els.chooseDurga.onclick=()=>choose('overlay-durga.png');
+  function choose(name){ preloadOverlay(name); }
+  els.modeCouple.onclick = () => choose('overlay-couple.png');
+  els.modeShiv.onclick   = () => choose('overlay-shiv.png');
+  els.modeDurga.onclick  = () => choose('overlay-durga.png');
+  els.chooseCouple.onclick = () => choose('overlay-couple.png');
+  els.chooseShiv.onclick   = () => choose('overlay-shiv.png');
+  els.chooseDurga.onclick  = () => choose('overlay-durga.png');
 
-  els.startCam.onclick=async()=>{
-    if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){
-      alert('Camera not available. Use Upload Photo.');return;
+  // Camera: ensure we call play() after metadata
+  els.startCam.onclick = async ()=>{
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
+      setStatus('Camera API not available. Use Upload Photo.', true);
+      return;
     }
     try{
-      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});
-      els.video.srcObject=stream; usingVideo=true; sourceImage=null;
-    }catch(e){ alert('Camera error: '+(e.message||e)); }
+      setStatus('Requesting camera…');
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "user" },
+          width:  { ideal: 1280 },
+          height: { ideal: 720 }
+        }, audio:false
+      });
+      els.video.srcObject = stream;
+      // Important: wait for metadata then play()
+      await new Promise(res=>{
+        els.video.onloadedmetadata = res;
+      });
+      await els.video.play().catch(()=>{});
+      usingVideo = true;
+      sourceImage = null;
+      hideModal();
+      setStatus('Camera started.');
+    }catch(e){
+      console.error(e);
+      setStatus('Camera error: ' + (e.message||e), true);
+      usingVideo = false;
+    }
   };
-  els.stopCam.onclick=()=>{ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} usingVideo=false; };
-
-  els.upload.onchange=async(e)=>{
-    const f=e.target.files?.[0]; if(!f) return;
-    try{ sourceImage=await loadImageFromFile(f); usingVideo=false; tx=ty=0; zoom=1; rotation=0; }
-    catch{ alert('Could not open that photo.'); }
+  els.stopCam.onclick = ()=>{
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+    usingVideo=false; setStatus('Camera stopped.');
   };
 
-  els.zoom.oninput=()=> zoom=parseInt(els.zoom.value,10)/100;
-  els.rotate.oninput=()=> rotation=parseInt(els.rotate.value,10)*Math.PI/180;
+  // Upload still
+  els.upload.onchange = async (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    try{
+      sourceImage = await loadImageFromFile(f);
+      usingVideo = false; tx=ty=0; zoom=1; rotation=0;
+      hideModal();
+      setStatus('Photo loaded.');
+    }catch{
+      setStatus('Could not open that photo. Try PNG or JPG.', true);
+    }
+  };
 
-  let dragging=false,lx=0,ly=0;
-  els.canvas.addEventListener('pointerdown',e=>{dragging=true;lx=e.clientX;ly=e.clientY;els.canvas.setPointerCapture(e.pointerId)});
-  els.canvas.addEventListener('pointerup',e=>{dragging=false;els.canvas.releasePointerCapture(e.pointerId)});
-  els.canvas.addEventListener('pointercancel',()=>dragging=false);
-  els.canvas.addEventListener('pointermove',e=>{if(!dragging) return; const dx=e.clientX-lx,dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; tx+=dx; ty+=dy;});
-  els.canvas.addEventListener('wheel',e=>{e.preventDefault(); const f=(e.deltaY<0)?1.05:0.95; zoom=Math.min(3,Math.max(0.5,zoom*f));}, {passive:false});
+  // Transforms & interactions
+  els.zoom.oninput = ()=> zoom = parseInt(els.zoom.value,10)/100;
+  els.rotate.oninput = ()=> rotation = parseInt(els.rotate.value,10) * Math.PI/180;
+  let dragging=false, lx=0, ly=0;
+  els.canvas.addEventListener('pointerdown', e=>{ dragging=true; lx=e.clientX; ly=e.clientY; els.canvas.setPointerCapture(e.pointerId);} );
+  els.canvas.addEventListener('pointerup',   e=>{ dragging=false; els.canvas.releasePointerCapture(e.pointerId);} );
+  els.canvas.addEventListener('pointercancel', ()=> dragging=false);
+  els.canvas.addEventListener('pointermove', e=>{ if(!dragging) return; const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; tx+=dx; ty+=dy; });
+  els.canvas.addEventListener('wheel', e=>{ e.preventDefault(); const f=(e.deltaY<0)?1.05:0.95; zoom=Math.min(3,Math.max(0.5,zoom*f)); els.zoom.value=Math.round(zoom*100); }, {passive:false});
 
-  function coverFit(sw,sh,dw,dh){const s=Math.max(dw/sw,dh/sh); return {w:sw*s,h:sh*s};}
+  function coverFit(sw,sh,dw,dh){ const s=Math.max(dw/sw, dh/sh); return {w:sw*s, h:sh*s}; }
 
   function draw(){
     requestAnimationFrame(draw);
     const ctx=els.ctx, W=els.canvas.clientWidth, H=els.canvas.clientHeight;
     ctx.clearRect(0,0,W,H); ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
 
+    // Person layer
     ctx.save();
     ctx.translate(W/2+tx, H/2+ty);
     ctx.rotate(rotation);
-    ctx.scale(zoom*(document.getElementById('mirror').checked?-1:1), zoom);
+    ctx.scale(zoom*(els.mirror.checked?-1:1), zoom);
 
-    if(usingVideo && els.video.readyState>=2){
+    if(usingVideo && els.video.readyState >= 2){
       const vw=els.video.videoWidth||1280, vh=els.video.videoHeight||720;
-      const s=coverFit(vw,vh,W,H); ctx.drawImage(els.video,-s.w/2,-s.h/2,s.w,s.h);
+      const s=coverFit(vw,vh,W,H);
+      ctx.drawImage(els.video, -s.w/2, -s.h/2, s.w, s.h);
     } else if(sourceImage){
       const iw=sourceImage.width, ih=sourceImage.height;
-      const s=coverFit(iw,ih,W,H); ctx.drawImage(sourceImage,-s.w/2,-s.h/2,s.w,s.h);
+      const s=coverFit(iw,ih,W,H);
+      ctx.drawImage(sourceImage, -s.w/2, -s.h/2, s.w, s.h);
     } else {
-      const s=24; for(let y=-H;y<H;y+=s){ for(let x=-W;x<W;x+=s){ ctx.fillStyle=((x+y)/s)%2===0?'#1a1f33':'#131831'; ctx.fillRect(x,y,s,s);}}
+      // checker background
+      const s=24; for(let y=-H;y<H;y+=s){ for(let x=-W;x<W;x+=s){ ctx.fillStyle=((x+y)/s)%2===0?'#1a1f33':'#131831'; ctx.fillRect(x,y,s,s);} }
     }
     ctx.restore();
 
-    if(overlayImage){ ctx.drawImage(overlayImage,0,0,W,H); }
+    // Overlay (if present)
+    if(overlayImage){ ctx.drawImage(overlayImage, 0, 0, W, H); }
 
     // Footer
     ctx.save();
-    ctx.font = Math.max(10, Math.round(W*0.014)) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.font = Math.max(10, Math.round(W * 0.014)) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
     ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.textAlign="center"; ctx.textBaseline="bottom";
     const pad=Math.max(8,Math.round(W*0.015));
     ctx.shadowColor="rgba(0,0,0,0.6)"; ctx.shadowBlur=4; ctx.shadowOffsetX=0; ctx.shadowOffsetY=1;
-    ctx.fillText(FOOTER_TEXT, W/2, H-pad);
+    ctx.fillText(FOOTER_TEXT, W/2, H - pad);
     ctx.restore();
   }
   draw();
-
-  document.getElementById('snap').onclick=()=>{
+  // capture
+  document.getElementById('snap').onclick = ()=>{
     els.canvas.toBlob(blob=>{
       const a=document.createElement('a');
-      a.href=URL.createObjectURL(blob);
-      a.download='PujaBooth_'+new Date().toISOString().replace(/[:T]/g,'-').slice(0,16)+'.png';
+      a.href = URL.createObjectURL(blob);
+      a.download = 'PujaBooth_'+new Date().toISOString().replace(/[:T]/g,'-').slice(0,16)+'.png';
       a.click();
-    },'image/png');
+    }, 'image/png');
   };
 })();
 </script>
