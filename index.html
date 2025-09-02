@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Puja Photo Booth — Couple / Shiv / Durga</title>
+<style>
+  :root{--bg:#0f1020;--panel:#17192e;--muted:#9aa3b2;--text:#f2f5f7;--accent:#ffb703;--ok:#0ea5e9}
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0c0d1a,#12142a 60%,#0c0d1a);color:var(--text);
+       font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px}
+  header{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  h1{font-size:20px;margin:0}
+  .tag{font-size:11px;background:var(--accent);color:#00131e;border-radius:999px;padding:2px 8px}
+  .grid{display:grid;grid-template-columns:420px 1fr;gap:14px}
+  .card{background:#17192e;border:1px solid #232642;border-radius:16px;padding:14px}
+  .stack{display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input[type=file],select,button,input[type=range]{
+    background:#243046;color:#e9eef8;border:1px solid #2a3450;border-radius:10px;padding:10px 12px
+  }
+  button{cursor:pointer} button:hover{filter:brightness(.95)}
+  .btn-accent{background:var(--ok);border-color:#0a84c2;color:#00131e;font-weight:600}
+  .note{font-size:12px;color:var(--muted)}
+  canvas{width:100%;height:auto;background:#000;border-radius:12px;touch-action:pinch-zoom pan-x pan-y}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:40}
+  .modal>.box{background:#0b1430;border:1px solid #2a3b61;border-radius:16px;padding:18px;max-width:520px;width:92%}
+  .opt{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
+  .opt button{flex:1 1 140px;padding:12px;border-radius:12px;border:1px solid #2b4066;background:#132448}
+  .opt button span{display:block;font-size:12px;color:#bcd7ff}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+</style>
+
+<body>
+<div class="wrap">
+  <header>
+    <span class="tag">No-Server • No-Storage</span>
+    <h1>Puja Photo Booth</h1>
+  </header>
+
+  <div class="grid">
+    <div class="card stack">
+      <h3>Source</h3>
+      <div class="row">
+        <button id="startCam">Use Camera</button>
+        <button id="stopCam">Stop Camera</button>
+        <input id="uploadPhoto" type="file" accept="image/*"/>
+      </div>
+      <label><input type="checkbox" id="mirror" checked/> Mirror preview</label>
+
+      <h3>Overlay</h3>
+      <div class="row">
+        <button id="chooseCouple">Couple (Shiv+Durga)</button>
+        <button id="chooseShiv">Single (Shiv)</button>
+        <button id="chooseDurga">Single (Durga)</button>
+      </div>
+
+      <h3>Position</h3>
+      <div class="row">
+        <label>Zoom <input id="zoom" type="range" min="50" max="300" value="100"/></label>
+        <label>Rotate <input id="rotate" type="range" min="-20" max="20" value="0"/></label>
+      </div>
+
+      <h3>Capture</h3>
+      <div class="row">
+        <select id="ratio">
+          <option value="1" selected>1:1</option>
+          <option value="1.3333333">4:3</option>
+          <option value="1.7777778">16:9</option>
+          <option value="0.75">3:4</option>
+        </select>
+        <button id="snap" class="btn-accent">Capture & Download</button>
+      </div>
+      <div class="note">Tip: Drag to move, wheel/pinch to zoom. All processing is local.</div>
+    </div>
+
+    <div class="card">
+      <h3>Live Preview</h3>
+      <canvas id="preview" width="960" height="960" aria-label="Photo booth preview"></canvas>
+    </div>
+  </div>
+</div>
+
+<div id="modeModal" class="modal" role="dialog" aria-modal="true" aria-label="Choose mode">
+  <div class="box">
+    <h2 style="margin:0 0 6px 0">Who is in the photo?</h2>
+    <div class="opt">
+      <button id="modeCouple">Couple (Shiv + Durga)<span>Two faces</span></button>
+      <button id="modeShiv">Single (Shiv)<span>One face</span></button>
+      <button id="modeDurga">Single (Durga)<span>One face</span></button>
+    </div>
+    <p class="note" style="margin-top:10px">You can change this anytime from the Overlay buttons.</p>
+  </div>
+</div>
+
+<video id="video" autoplay playsinline style="display:none"></video>
+
+<script>
+(() => {
+  const els = {
+    video: document.getElementById('video'),
+    canvas: document.getElementById('preview'),
+    ctx: document.getElementById('preview').getContext('2d'),
+    startCam: document.getElementById('startCam'),
+    stopCam: document.getElementById('stopCam'),
+    upload: document.getElementById('uploadPhoto'),
+    mirror: document.getElementById('mirror'),
+    zoom: document.getElementById('zoom'),
+    rotate: document.getElementById('rotate'),
+    ratio: document.getElementById('ratio'),
+    modeModal: document.getElementById('modeModal'),
+    chooseCouple: document.getElementById('chooseCouple'),
+    chooseShiv: document.getElementById('chooseShiv'),
+    chooseDurga: document.getElementById('chooseDurga'),
+    modeCouple: document.getElementById('modeCouple'),
+    modeShiv: document.getElementById('modeShiv'),
+    modeDurga: document.getElementById('modeDurga'),
+  };
+
+  let stream = null;
+  let sourceImage = null;
+  let overlayImage = null;
+  let usingVideo = false;
+
+  const FOOTER_TEXT = "Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in";
+
+  let tx=0, ty=0, zoom=1, rotation=0;
+  function setCanvasAspect(aspect){
+    const cssW=960, cssH=Math.round(cssW/aspect);
+    const dpr=window.devicePixelRatio||1;
+    els.canvas.style.width=cssW+'px';
+    els.canvas.style.height=cssH+'px';
+    els.canvas.width=Math.round(cssW*dpr);
+    els.canvas.height=Math.round(cssH*dpr);
+    els.ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  setCanvasAspect(parseFloat(els.ratio.value));
+  els.ratio.addEventListener('change', ()=> setCanvasAspect(parseFloat(els.ratio.value)));
+
+  function blobToImage(blob){
+    return new Promise((resolve,reject)=>{
+      const url=URL.createObjectURL(blob);
+      const img=new Image();
+      img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
+      img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('img load'))};
+      img.src=url;
+    });
+  }
+  function loadImageFromFile(file){
+    return new Promise((resolve,reject)=>{
+      if(!file) return reject(new Error('no file'));
+      const url=URL.createObjectURL(file);
+      const img=new Image();
+      img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
+      img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('load fail'))};
+      img.src=url;
+    });
+  }
+  async function preloadOverlay(name){
+    try{
+      const res=await fetch('assets/'+name,{cache:'no-store'});
+      if(!res.ok) throw new Error('not found');
+      const blob=await res.blob();
+      overlayImage=await blobToImage(blob);
+      hideModal();
+    }catch(_){/* ok if missing */}
+  }
+
+  function showModal(){els.modeModal.style.display='flex'}
+  function hideModal(){els.modeModal.style.display='none'}
+
+  showModal();
+  preloadOverlay('overlay-couple.png');
+
+  function choose(name){preloadOverlay(name)}
+  els.modeCouple.onclick=()=>choose('overlay-couple.png');
+  els.modeShiv.onclick=()=>choose('overlay-shiv.png');
+  els.modeDurga.onclick=()=>choose('overlay-durga.png');
+  els.chooseCouple.onclick=()=>choose('overlay-couple.png');
+  els.chooseShiv.onclick=()=>choose('overlay-shiv.png');
+  els.chooseDurga.onclick=()=>choose('overlay-durga.png');
+
+  els.startCam.onclick=async()=>{
+    if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){
+      alert('Camera not available. Use Upload Photo.');return;
+    }
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});
+      els.video.srcObject=stream; usingVideo=true; sourceImage=null;
+    }catch(e){ alert('Camera error: '+(e.message||e)); }
+  };
+  els.stopCam.onclick=()=>{ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} usingVideo=false; };
+
+  els.upload.onchange=async(e)=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    try{ sourceImage=await loadImageFromFile(f); usingVideo=false; tx=ty=0; zoom=1; rotation=0; }
+    catch{ alert('Could not open that photo.'); }
+  };
+
+  els.zoom.oninput=()=> zoom=parseInt(els.zoom.value,10)/100;
+  els.rotate.oninput=()=> rotation=parseInt(els.rotate.value,10)*Math.PI/180;
+
+  let dragging=false,lx=0,ly=0;
+  els.canvas.addEventListener('pointerdown',e=>{dragging=true;lx=e.clientX;ly=e.clientY;els.canvas.setPointerCapture(e.pointerId)});
+  els.canvas.addEventListener('pointerup',e=>{dragging=false;els.canvas.releasePointerCapture(e.pointerId)});
+  els.canvas.addEventListener('pointercancel',()=>dragging=false);
+  els.canvas.addEventListener('pointermove',e=>{if(!dragging) return; const dx=e.clientX-lx,dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; tx+=dx; ty+=dy;});
+  els.canvas.addEventListener('wheel',e=>{e.preventDefault(); const f=(e.deltaY<0)?1.05:0.95; zoom=Math.min(3,Math.max(0.5,zoom*f));}, {passive:false});
+
+  function coverFit(sw,sh,dw,dh){const s=Math.max(dw/sw,dh/sh); return {w:sw*s,h:sh*s};}
+
+  function draw(){
+    requestAnimationFrame(draw);
+    const ctx=els.ctx, W=els.canvas.clientWidth, H=els.canvas.clientHeight;
+    ctx.clearRect(0,0,W,H); ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+
+    ctx.save();
+    ctx.translate(W/2+tx, H/2+ty);
+    ctx.rotate(rotation);
+    ctx.scale(zoom*(document.getElementById('mirror').checked?-1:1), zoom);
+
+    if(usingVideo && els.video.readyState>=2){
+      const vw=els.video.videoWidth||1280, vh=els.video.videoHeight||720;
+      const s=coverFit(vw,vh,W,H); ctx.drawImage(els.video,-s.w/2,-s.h/2,s.w,s.h);
+    } else if(sourceImage){
+      const iw=sourceImage.width, ih=sourceImage.height;
+      const s=coverFit(iw,ih,W,H); ctx.drawImage(sourceImage,-s.w/2,-s.h/2,s.w,s.h);
+    } else {
+      const s=24; for(let y=-H;y<H;y+=s){ for(let x=-W;x<W;x+=s){ ctx.fillStyle=((x+y)/s)%2===0?'#1a1f33':'#131831'; ctx.fillRect(x,y,s,s);}}
+    }
+    ctx.restore();
+
+    if(overlayImage){ ctx.drawImage(overlayImage,0,0,W,H); }
+
+    // Footer
+    ctx.save();
+    ctx.font = Math.max(10, Math.round(W*0.014)) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+    const pad=Math.max(8,Math.round(W*0.015));
+    ctx.shadowColor="rgba(0,0,0,0.6)"; ctx.shadowBlur=4; ctx.shadowOffsetX=0; ctx.shadowOffsetY=1;
+    ctx.fillText(FOOTER_TEXT, W/2, H-pad);
+    ctx.restore();
+  }
+  draw();
+
+  document.getElementById('snap').onclick=()=>{
+    els.canvas.toBlob(blob=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='PujaBooth_'+new Date().toISOString().replace(/[:T]/g,'-').slice(0,16)+'.png';
+      a.click();
+    },'image/png');
+  };
+})();
+</script>
+</body>
+</html>
