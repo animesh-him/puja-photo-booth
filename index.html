@@ -184,9 +184,9 @@
   function showModal(){ els.modeModal.style.display='flex'; }
   function hideModal(){ els.modeModal.style.display='none'; }
 
+  // Startup
   showModal();
   preloadOverlay('overlay-couple.png');
-
   function choose(name){ preloadOverlay(name); }
   els.modeCouple.onclick = () => choose('overlay-couple.png');
   els.modeShiv.onclick   = () => choose('overlay-shiv.png');
@@ -195,7 +195,7 @@
   els.chooseShiv.onclick   = () => choose('overlay-shiv.png');
   els.chooseDurga.onclick  = () => choose('overlay-durga.png');
 
-  // Camera: ensure we call play() after metadata
+  // Camera
   els.startCam.onclick = async ()=>{
     if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
       setStatus('Camera API not available. Use Upload Photo.', true);
@@ -211,10 +211,7 @@
         }, audio:false
       });
       els.video.srcObject = stream;
-      // Important: wait for metadata then play()
-      await new Promise(res=>{
-        els.video.onloadedmetadata = res;
-      });
+      await new Promise(res => { els.video.onloadedmetadata = res; });
       await els.video.play().catch(()=>{});
       usingVideo = true;
       sourceImage = null;
@@ -253,14 +250,24 @@
   els.canvas.addEventListener('pointerup',   e=>{ dragging=false; els.canvas.releasePointerCapture(e.pointerId);} );
   els.canvas.addEventListener('pointercancel', ()=> dragging=false);
   els.canvas.addEventListener('pointermove', e=>{ if(!dragging) return; const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; tx+=dx; ty+=dy; });
-  els.canvas.addEventListener('wheel', e=>{ e.preventDefault(); const f=(e.deltaY<0)?1.05:0.95; zoom=Math.min(3,Math.max(0.5,zoom*f)); els.zoom.value=Math.round(zoom*100); }, {passive:false});
+  els.canvas.addEventListener('wheel', e=>{
+    e.preventDefault();
+    const f=(e.deltaY<0)?1.05:0.95;
+    zoom=Math.min(3,Math.max(0.5,zoom*f));
+    els.zoom.value=Math.round(zoom*100);
+  }, {passive:false});
 
   function coverFit(sw,sh,dw,dh){ const s=Math.max(dw/sw, dh/sh); return {w:sw*s, h:sh*s}; }
 
+  // Draw loop — uses real buffer size (fix)
   function draw(){
     requestAnimationFrame(draw);
-    const ctx=els.ctx, W=els.canvas.clientWidth, H=els.canvas.clientHeight;
-    ctx.clearRect(0,0,W,H); ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+    const ctx = els.ctx;
+    const W = els.canvas.width;   // <-- real buffer width
+    const H = els.canvas.height;  // <-- real buffer height
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,W,H);
 
     // Person layer
     ctx.save();
@@ -277,25 +284,26 @@
       const s=coverFit(iw,ih,W,H);
       ctx.drawImage(sourceImage, -s.w/2, -s.h/2, s.w, s.h);
     } else {
-      // checker background
-      const s=24; for(let y=-H;y<H;y+=s){ for(let x=-W;x<W;x+=s){ ctx.fillStyle=((x+y)/s)%2===0?'#1a1f33':'#131831'; ctx.fillRect(x,y,s,s);} }
+      // checker
+      const s=24; for(let y=-H;y<H;y+=s){ for(let x=-W;x<W;x+=s){ ctx.fillStyle=((x+y)/s)%2===0?'#1a1f33':'#131831'; ctx.fillRect(x,y,s,s); } }
     }
     ctx.restore();
 
     // Overlay (if present)
     if(overlayImage){ ctx.drawImage(overlayImage, 0, 0, W, H); }
 
-    // Footer
+    // Footer caption
     ctx.save();
     ctx.font = Math.max(10, Math.round(W * 0.014)) + "px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
     ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.textAlign="center"; ctx.textBaseline="bottom";
     const pad=Math.max(8,Math.round(W*0.015));
     ctx.shadowColor="rgba(0,0,0,0.6)"; ctx.shadowBlur=4; ctx.shadowOffsetX=0; ctx.shadowOffsetY=1;
-    ctx.fillText(FOOTER_TEXT, W/2, H - pad);
+    ctx.fillText("Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in", W/2, H - pad);
     ctx.restore();
   }
   draw();
-  // capture
+
+  // Capture
   document.getElementById('snap').onclick = ()=>{
     els.canvas.toBlob(blob=>{
       const a=document.createElement('a');
