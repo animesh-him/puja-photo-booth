@@ -30,7 +30,7 @@
   #status.warn{background:#3a1b1b;border-color:#5e2b2b;color:#ffd3d3}
   #diag{margin:8px 0 0 0; font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#9ab4ff}
   @media (max-width:980px){.grid{grid-template-columns:1fr}}
-  /* Keep video alive but invisible (some browsers need it in-flow) */
+  /* Keep video alive but offscreen so frames flow on Android/iOS */
   video#video{position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0}
 </style>
 
@@ -48,6 +48,7 @@
       <h3>Source</h3>
       <div class="row">
         <button id="startCam">Use Camera</button>
+        <button id="flipCam">Flip Camera</button>
         <button id="stopCam">Stop Camera</button>
         <input id="uploadPhoto" type="file" accept="image/*"/>
       </div>
@@ -58,13 +59,19 @@
         <button id="chooseCouple">Couple (Shiv+Durga)</button>
         <button id="chooseShiv">Single (Shiv)</button>
         <button id="chooseDurga">Single (Durga)</button>
+        <button id="noOverlay">No Overlay</button>
       </div>
-      <div class="note">Place your PNGs in <code>assets/</code> as <code>overlay-couple.png</code>, <code>overlay-shiv.png</code>, <code>overlay-durga.png</code>.</div>
+      <div class="row">
+        <label><input type="checkbox" id="showOverlay" checked/> Show Overlay</label>
+        <label>Opacity <input id="overlayAlpha" type="range" min="0" max="100" value="100"/></label>
+      </div>
+      <div class="note">Place PNGs in <code>assets/</code>: <code>overlay-couple.png</code>, <code>overlay-shiv.png</code>, <code>overlay-durga.png</code>. Use transparent cutouts.</div>
 
       <h3>Position</h3>
       <div class="row">
         <label>Zoom <input id="zoom" type="range" min="50" max="300" value="100"/></label>
         <label>Rotate <input id="rotate" type="range" min="-20" max="20" value="0"/></label>
+        <button id="resetView">Reset View</button>
       </div>
 
       <h3>Capture</h3>
@@ -111,15 +118,20 @@
     ctx: document.getElementById('preview').getContext('2d'),
     startCam: document.getElementById('startCam'),
     stopCam: document.getElementById('stopCam'),
+    flipCam: document.getElementById('flipCam'),
     upload: document.getElementById('uploadPhoto'),
     mirror: document.getElementById('mirror'),
-    zoom: document.getElementById('zoom'),
-    rotate: document.getElementById('rotate'),
+    zoomEl: document.getElementById('zoom'),
+    rotateEl: document.getElementById('rotate'),
     ratio: document.getElementById('ratio'),
-    modeModal: document.getElementById('modeModal'),
+    resetView: document.getElementById('resetView'),
+    showOverlay: document.getElementById('showOverlay'),
+    overlayAlpha: document.getElementById('overlayAlpha'),
     chooseCouple: document.getElementById('chooseCouple'),
     chooseShiv: document.getElementById('chooseShiv'),
     chooseDurga: document.getElementById('chooseDurga'),
+    noOverlay: document.getElementById('noOverlay'),
+    modeModal: document.getElementById('modeModal'),
     modeCouple: document.getElementById('modeCouple'),
     modeShiv: document.getElementById('modeShiv'),
     modeDurga: document.getElementById('modeDurga'),
@@ -135,12 +147,23 @@
   const FOOTER_TEXT = "Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in";
   let tx=0, ty=0, zoom=1, rotation=0;
 
+  let devices = [];
+  let facing = "user";          // desired facing
+  let currentDeviceId = null;   // actual deviceId we’re using
+
+  // State for overlay visibility
+  let hasDrawnVideoFrame = false;
+
   function setStatus(msg, warn=false){
     els.status.textContent = msg;
     els.status.className = warn ? 'warn' : '';
     els.status.style.display = msg ? 'block' : 'none';
   }
-
+  function resetTransform(){
+    tx=0; ty=0; zoom=1; rotation=0;
+    els.zoomEl.value = 100;
+    els.rotateEl.value = 0;
+  }
   function setCanvasAspect(aspect){
     const cssW=960, cssH=Math.round(cssW/aspect);
     const dpr=window.devicePixelRatio||1;
@@ -148,10 +171,10 @@
     els.canvas.style.height=cssH+'px';
     els.canvas.width=Math.round(cssW*dpr);
     els.canvas.height=Math.round(cssH*dpr);
-    els.ctx.setTransform(dpr,0,0,dpr,0,0); // Now canvas coordinates are in CSS pixels
+    els.ctx.setTransform(dpr,0,0,dpr,0,0);
   }
   setCanvasAspect(parseFloat(els.ratio.value));
-  els.ratio.addEventListener('change', () => setCanvasAspect(parseFloat(els.ratio.value)));
+  els.ratio.addEventListener('change', () => { setCanvasAspect(parseFloat(els.ratio.value)); resetTransform(); });
 
   function blobToImage(blob){
     return new Promise((resolve,reject)=>{
@@ -180,9 +203,11 @@
       overlayImage = await blobToImage(blob);
       hideModal();
       setStatus("Overlay loaded: "+path);
+      resetTransform();
     }catch(e){
       overlayImage = null;
       setStatus("Overlay '"+path+"' not found in assets/. You can still upload a photo and capture.", true);
+      resetTransform();
     }
   }
 
@@ -199,38 +224,90 @@
   els.chooseCouple.onclick = () => choose('overlay-couple.png');
   els.chooseShiv.onclick   = () => choose('overlay-shiv.png');
   els.chooseDurga.onclick  = () => choose('overlay-durga.png');
+  els.noOverlay.onclick    = () => { overlayImage = null; hideModal(); setStatus('Overlay disabled.'); };
 
-  // Camera
-  els.startCam.onclick = async ()=>{
+  // Enumerate devices (front/back detection). Needs a permission grant first on some browsers.
+  async function refreshDevices(){
+    try{
+      devices = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    }catch(_){ devices = []; }
+  }
+
+  function pickDeviceIdForFacing(){
+    if(!devices.length) return null;
+    // Try label-based match after permission
+    const isFront = (d)=>/front|user|selfie/i.test(d.label);
+    const isBack  = (d)=>/back|rear|environment/i.test(d.label);
+    if(facing === 'user'){
+      let d = devices.find(isFront) || devices[0];
+      return d?.deviceId || null;
+    }else{
+      let d = devices.find(isBack) || devices[devices.length-1];
+      return d?.deviceId || null;
+    }
+  }
+
+  async function startCamera(){
     if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
       setStatus('Camera API not available. Use Upload Photo.', true);
       return;
     }
     try{
       setStatus('Requesting camera…');
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "user" },
-          width:  { ideal: 1280 },
-          height: { ideal: 720 }
-        }, audio:false
-      });
-      els.video.srcObject = stream;
-      await new Promise(res => { els.video.onloadedmetadata = res; });
-      await els.video.play().catch(()=>{});
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+
+      // 1) Try with deviceId (best for Realme/Android)
+      await refreshDevices();
+      currentDeviceId = pickDeviceIdForFacing();
+      let tried = [];
+
+      async function attempt(c){
+        tried.push(JSON.stringify(c));
+        const s = await navigator.mediaDevices.getUserMedia(c);
+        els.video.srcObject = s;
+        await new Promise(res => { els.video.onloadedmetadata = res; });
+        await els.video.play().catch(()=>{});
+        return s;
+      }
+
+      try {
+        if(currentDeviceId){
+          stream = await attempt({ video: { deviceId: { exact: currentDeviceId }, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+        } else {
+          throw new Error('no deviceId yet');
+        }
+      } catch(_a){
+        // 2) Fallback: facingMode
+        try{
+          stream = await attempt({ video: { facingMode: facing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+        }catch(_b){
+          // 3) Fallback: any camera
+          stream = await attempt({ video: true, audio:false });
+        }
+      }
+
       usingVideo = true;
       sourceImage = null;
+      hasDrawnVideoFrame = false;
       hideModal();
       setStatus('Camera started.');
+      resetTransform();
+
     }catch(e){
-      console.error(e);
+      console.error('Camera error', e);
       setStatus('Camera error: ' + (e.message||e), true);
       usingVideo = false;
     }
-  };
+  }
+
+  els.startCam.onclick = startCamera;
   els.stopCam.onclick = ()=>{
     if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
     usingVideo=false; setStatus('Camera stopped.');
+  };
+  els.flipCam.onclick = async ()=>{
+    facing = (facing === 'user' ? 'environment' : 'user');
+    await startCamera();
   };
 
   // Upload still
@@ -239,17 +316,21 @@
     if(!f) return;
     try{
       sourceImage = await loadImageFromFile(f);
-      usingVideo = false; tx=ty=0; zoom=1; rotation=0;
+      usingVideo = false;
       hideModal();
       setStatus('Photo loaded.');
+      resetTransform();
     }catch{
       setStatus('Could not open that photo. Try PNG or JPG.', true);
     }
   };
 
-  // Transforms & interactions
-  els.zoom.oninput = ()=> zoom = parseInt(els.zoom.value,10)/100;
-  els.rotate.oninput = ()=> rotation = parseInt(els.rotate.value,10) * Math.PI/180;
+  // Controls
+  els.resetView.onclick = resetTransform;
+  els.zoomEl.oninput = ()=> zoom = parseInt(els.zoomEl.value,10)/100;
+  els.rotateEl.oninput = ()=> rotation = parseInt(els.rotateEl.value,10) * Math.PI/180;
+
+  // Pointer interactions
   let dragging=false, lx=0, ly=0;
   els.canvas.addEventListener('pointerdown', e=>{ dragging=true; lx=e.clientX; ly=e.clientY; els.canvas.setPointerCapture(e.pointerId);} );
   els.canvas.addEventListener('pointerup',   e=>{ dragging=false; els.canvas.releasePointerCapture(e.pointerId);} );
@@ -259,7 +340,7 @@
     e.preventDefault();
     const f=(e.deltaY<0)?1.05:0.95;
     zoom=Math.min(3,Math.max(0.5,zoom*f));
-    els.zoom.value=Math.round(zoom*100);
+    els.zoomEl.value=Math.round(zoom*100);
   }, {passive:false});
 
   function coverFit(sw,sh,dw,dh){ const s=Math.max(dw/sw, dh/sh); return {w:sw*s, h:sh*s}; }
@@ -271,14 +352,13 @@
     if(now-lastT>1000){ fps=frames; frames=0; lastT=now; }
   }
 
-  // Draw loop — coordinates in CSS pixels (logical), not device pixels
   function draw(){
     requestAnimationFrame(draw);
     tickFPS();
     const dpr = window.devicePixelRatio || 1;
     const ctx = els.ctx;
-    const W = els.canvas.width / dpr;   // logical width
-    const H = els.canvas.height / dpr;  // logical height
+    const W = els.canvas.width / dpr;
+    const H = els.canvas.height / dpr;
 
     ctx.clearRect(0,0,W,H);
     ctx.fillStyle='#000';
@@ -294,6 +374,7 @@
       const vw=els.video.videoWidth||1280, vh=els.video.videoHeight||720;
       const s=coverFit(vw,vh,W,H);
       ctx.drawImage(els.video, -s.w/2, -s.h/2, s.w, s.h);
+      hasDrawnVideoFrame = true;
     } else if(sourceImage){
       const iw=sourceImage.width, ih=sourceImage.height;
       const s=coverFit(iw,ih,W,H);
@@ -303,8 +384,13 @@
     }
     ctx.restore();
 
-    // Overlay (if present)
-    if(overlayImage){ ctx.drawImage(overlayImage, 0, 0, W, H); }
+    // Overlay (respect toggle + opacity; also hide until we have content so opaque PNGs don't block)
+    if(overlayImage && els.showOverlay.checked && (hasDrawnVideoFrame || sourceImage)){
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, parseInt(els.overlayAlpha.value,10)/100));
+      ctx.drawImage(overlayImage, 0, 0, W, H);
+      ctx.restore();
+    }
 
     // Footer caption
     ctx.save();
@@ -316,7 +402,11 @@
     ctx.restore();
 
     // Diag line
-    els.diag.textContent = `fps:${fps} dpr:${dpr} size:${Math.round(W)}×${Math.round(H)} videoRS:${els.video.readyState} cam:${usingVideo?'on':'off'} overlay:${overlayImage?'yes':'no'} img:${sourceImage?'yes':'no'}`;
+    els.diag.textContent =
+      `fps:${fps} dpr:${dpr} size:${Math.round(W)}×${Math.round(H)} `+
+      `videoRS:${els.video.readyState} cam:${usingVideo?'on':'off'} `+
+      `overlay:${overlayImage?'yes':'no'} img:${sourceImage?'yes':'no'} `+
+      `devs:${devices.length} facing:${facing} devId:${currentDeviceId?currentDeviceId.slice(0,6):'none'}`;
   }
   draw();
 
