@@ -1,123 +1,405 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Puja Photo Booth</title>
-  <style>
-    body { background: #111; color: #eee; font-family: sans-serif; text-align: center; }
-    #controls { margin: 1em; }
-    canvas { max-width: 95vw; border: 2px solid #444; margin-top: 1em; }
-  </style>
-</head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Puja Photo Booth — Masked (Shiv / Durga / Couple)</title>
+<style>
+  :root{--bg:#0f1020;--panel:#17192e;--muted:#9aa3b2;--text:#f2f5f7;--accent:#ffb703;--ok:#0ea5e9;--warn:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0c0d1a;color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px}
+  header{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  h1{font-size:20px;margin:0}
+  .tag{font-size:11px;background:var(--accent);color:#00131e;border-radius:999px;padding:2px 8px}
+  .grid{display:grid;grid-template-columns:420px 1fr;gap:14px}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+  .card{background:#17192e;border:1px solid #232642;border-radius:16px;padding:14px}
+  .stack{display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input[type=file],select,button,input[type=range]{background:#243046;color:#e9eef8;border:1px solid #2a3450;border-radius:10px;padding:10px 12px}
+  .btn-accent{background:var(--ok);border-color:#0a84c2;color:#00131e;font-weight:600}
+  .note{font-size:12px;color:var(--muted)}
+  canvas{width:100%;height:auto;background:#000;border-radius:12px;touch-action:pinch-zoom pan-x pan-y}
+  #status{margin:10px 0;padding:10px;border-radius:10px;background:#1b2236;border:1px solid #2b3a5e;color:#cfe1ff;display:none}
+  #status.warn{background:#3a1b1b;border-color:#5e2b2b;color:#ffd3d3}
+  #diag{margin:8px 0 0 0;font:12px/1.4 ui-monospace,Menlo,Consolas;color:#9ab4ff}
+  #videoBox{position:fixed;right:10px;bottom:10px;background:#000;border:1px solid #2a3450;border-radius:8px;padding:4px;z-index:50;display:none}
+  #video{width:200px;height:auto;border-radius:6px;background:#000}
+</style>
+
 <body>
-  <h1>Puja Photo Booth</h1>
-  <div id="controls">
-    <button id="useCam">Use Camera</button>
-    <button id="stopCam">Stop Camera</button>
-    <input type="file" id="fileInput" accept="image/*">
-    <br><br>
-    <button id="snap">Capture & Download</button>
+<div class="wrap">
+  <header><span class="tag">No-Server • No-Storage</span><h1>Puja Photo Booth</h1></header>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div class="grid">
+    <div class="card stack">
+      <h3>Source</h3>
+      <div class="row">
+        <button id="startCam">Use Camera</button>
+        <button id="flipCam">Flip Camera</button>
+        <button id="stopCam">Stop Camera</button>
+        <input id="uploadPhoto" type="file" accept="image/*"/>
+      </div>
+      <label><input type="checkbox" id="mirror" checked/> Mirror preview</label>
+
+      <h3>Overlay</h3>
+      <div class="row">
+        <button id="chooseCouple">Couple (Shiv+Durga)</button>
+        <button id="chooseShiv">Single (Shiv)</button>
+        <button id="chooseDurga">Single (Durga)</button>
+        <button id="noOverlay">No Overlay</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="showOverlay" checked/> Show Overlay</label>
+        <label>Opacity <input id="overlayAlpha" type="range" min="0" max="100" value="100"/></label>
+        <label><input type="checkbox" id="showRaw" checked/> Show Raw Video until ready</label>
+      </div>
+      <div class="note">Place transparent overlays & masks in <code>assets/</code>:
+        <code>overlay-*.png</code> and matching <code>overlay-*-mask.png</code> (white = face window).</div>
+
+      <h3>Position</h3>
+      <div class="row">
+        <label>Zoom <input id="zoom" type="range" min="50" max="300" value="100"/></label>
+        <label>Rotate <input id="rotate" type="range" min="-20" max="20" value="0"/></label>
+        <button id="resetView">Reset View</button>
+        <button id="fitFace">Fit to Face Window</button>
+      </div>
+
+      <h3>Capture</h3>
+      <div class="row">
+        <select id="ratio">
+          <option value="1" selected>1:1</option>
+          <option value="1.3333333">4:3</option>
+          <option value="1.7777778">16:9</option>
+          <option value="0.75">3:4</option>
+        </select>
+        <button id="snap" class="btn-accent">Capture & Download</button>
+      </div>
+      <div class="note">Drag to move; pinch/scroll to zoom. All processing is local.</div>
+      <div id="diag"></div>
+    </div>
+
+    <div class="card">
+      <h3>Live Preview</h3>
+      <canvas id="preview" width="960" height="960" aria-label="Photo booth preview"></canvas>
+    </div>
   </div>
-  <video id="video" autoplay playsinline style="display:none;"></video>
-  <canvas id="canvas" width="720" height="720"></canvas>
-  <p id="status"></p>
+</div>
+
+<!-- Mode chooser -->
+<div id="modeModal" class="modal" role="dialog" aria-modal="true" aria-label="Choose mode" style="position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:40">
+  <div style="background:#0b1430;border:1px solid #2a3b61;border-radius:16px;padding:18px;max-width:520px;width:92%">
+    <h2 style="margin:0 0 6px 0">Who is in the photo?</h2>
+    <div class="row" style="margin-top:8px">
+      <button id="modeCouple">Couple (Shiv + Durga)</button>
+      <button id="modeShiv">Single (Shiv)</button>
+      <button id="modeDurga">Single (Durga)</button>
+    </div>
+    <p class="note" style="margin-top:10px">Change anytime from Overlay buttons.</p>
+  </div>
+</div>
+
+<!-- Raw video box -->
+<div id="videoBox"><video id="video" playsinline autoplay muted></video></div>
 
 <script>
-const els = {
-  video: document.getElementById('video'),
-  canvas: document.getElementById('canvas'),
-  snap: document.getElementById('snap'),
-  useCam: document.getElementById('useCam'),
-  stopCam: document.getElementById('stopCam'),
-  fileInput: document.getElementById('fileInput'),
-  status: document.getElementById('status')
-};
-const ctx = els.canvas.getContext('2d');
-let stream = null;
-let sourceImage = null;
-let usingVideo = false;
-
-function setStatus(msg, err=false){
-  els.status.textContent = msg;
-  els.status.style.color = err ? 'tomato' : '#0f0';
-}
-
-function tsName(){
-  const d=new Date();
-  const pad=n=>String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
-}
-
-function downloadCanvas(canvas, filename){
-  if (canvas.toBlob) {
-    canvas.toBlob(blob => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
-    }, 'image/png', 0.95);
-  } else {
-    const url = canvas.toDataURL('image/png');
-    window.open(url, '_blank');
-  }
-}
-
-async function startCam(){
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
-    els.video.srcObject = stream;
-    els.video.style.display = 'block';
-    usingVideo = true;
-    setStatus('Camera started');
-    requestAnimationFrame(drawLoop);
-  } catch(e){
-    setStatus('Camera error: '+e.message,true);
-  }
-}
-function stopCam(){
-  if(stream){
-    stream.getTracks().forEach(t=>t.stop());
-    stream=null;
-  }
-  els.video.style.display='none';
-  usingVideo=false;
-  setStatus('Camera stopped');
-}
-function drawLoop(){
-  ctx.clearRect(0,0,els.canvas.width,els.canvas.height);
-  if(usingVideo){
-    ctx.drawImage(els.video,0,0,els.canvas.width,els.canvas.height);
-  } else if(sourceImage){
-    ctx.drawImage(sourceImage,0,0,els.canvas.width,els.canvas.height);
-  }
-  requestAnimationFrame(drawLoop);
-}
-els.useCam.onclick = startCam;
-els.stopCam.onclick = stopCam;
-els.fileInput.onchange = e => {
-  const file = e.target.files[0];
-  if(!file) return;
-  const img = new Image();
-  img.onload=()=>{
-    sourceImage=img;
-    usingVideo=false;
-    setStatus('Image loaded');
+(() => {
+  const els = {
+    video: document.getElementById('video'),
+    videoBox: document.getElementById('videoBox'),
+    showRaw: document.getElementById('showRaw'),
+    canvas: document.getElementById('preview'),
+    ctx: document.getElementById('preview').getContext('2d'),
+    startCam: document.getElementById('startCam'),
+    stopCam: document.getElementById('stopCam'),
+    flipCam: document.getElementById('flipCam'),
+    upload: document.getElementById('uploadPhoto'),
+    mirror: document.getElementById('mirror'),
+    zoomEl: document.getElementById('zoom'),
+    rotateEl: document.getElementById('rotate'),
+    ratio: document.getElementById('ratio'),
+    resetView: document.getElementById('resetView'),
+    fitFace: document.getElementById('fitFace'),
+    chooseCouple: document.getElementById('chooseCouple'),
+    chooseShiv: document.getElementById('chooseShiv'),
+    chooseDurga: document.getElementById('chooseDurga'),
+    noOverlay: document.getElementById('noOverlay'),
+    modeModal: document.getElementById('modeModal'),
+    modeCouple: document.getElementById('modeCouple'),
+    modeShiv: document.getElementById('modeShiv'),
+    modeDurga: document.getElementById('modeDurga'),
+    status: document.getElementById('status'),
+    diag: document.getElementById('diag'),
+    showOverlay: document.getElementById('showOverlay'),
+    overlayAlpha: document.getElementById('overlayAlpha'),
+    snap: document.getElementById('snap'),
   };
-  img.src=URL.createObjectURL(file);
-};
-els.snap.onclick = () => {
-  if (!sourceImage && !(usingVideo && els.video.readyState >= 2 && els.video.videoWidth > 0)) {
-    setStatus('Nothing to capture yet — start camera or upload a photo.', true);
-    return;
+
+  let stream=null, sourceImage=null, overlayImage=null, overlayMaskImage=null, usingVideo=false;
+  let devices=[], facing="user", currentDeviceId=null;
+  let hasDrawnVideoFrame=false, tx=0, ty=0, zoom=1, rotation=0;
+
+  const FOOTER = "Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in";
+
+  function setStatus(msg, warn=false){ els.status.textContent=msg; els.status.className=warn?'warn':''; els.status.style.display=msg?'block':'none'; }
+  function resetTransform(){ tx=0; ty=0; zoom=1; rotation=0; els.zoomEl.value=100; els.rotateEl.value=0; }
+  function setCanvasAspect(aspect){
+    const cssW=960, cssH=Math.round(cssW/aspect), dpr=window.devicePixelRatio||1;
+    els.canvas.style.width=cssW+'px'; els.canvas.style.height=cssH+'px';
+    els.canvas.width=Math.round(cssW*dpr); els.canvas.height=Math.round(cssH*dpr);
+    els.ctx.setTransform(dpr,0,0,dpr,0,0);
   }
-  const name = `booth_${tsName()}.png`;
-  downloadCanvas(els.canvas, name);
-  setStatus('Image captured — check your downloads.');
-};
+  setCanvasAspect(parseFloat(els.ratio.value));
+  els.ratio.addEventListener('change', ()=>{ setCanvasAspect(parseFloat(els.ratio.value)); resetTransform(); });
+
+  function tsName(){
+    const d=new Date(); const pad=n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+  }
+  function downloadCanvas(canvas, filename){
+    if (canvas.toBlob) {
+      canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
+      }, 'image/png', 0.95);
+    } else {
+      const url = canvas.toDataURL('image/png');
+      window.open(url, '_blank');
+    }
+  }
+
+  function blobToImage(blob){
+    return new Promise((resolve,reject)=>{
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+      img.src = url;
+    });
+  }
+  async function tryLoad(path){
+    const res = await fetch(path, {cache:'no-store'});
+    if (!res.ok) throw new Error('not found');
+    return blobToImage(await res.blob());
+  }
+  async function preloadOverlay(fileName){
+    try{
+      overlayImage = await tryLoad('assets/'+fileName);
+      // attempt mask with -mask.png sibling
+      const maskName = fileName.replace(/\.png$/i, '-mask.png');
+      try { overlayMaskImage = await tryLoad('assets/'+maskName); }
+      catch { overlayMaskImage = null; }
+      hideModal();
+      setStatus(`Overlay loaded: ${fileName}${overlayMaskImage?' (mask found)':' (no mask found)'}`);
+      resetTransform();
+    }catch(e){
+      overlayImage = null; overlayMaskImage = null;
+      setStatus(`Overlay '${fileName}' not found in assets/.`, true);
+      resetTransform();
+    }
+  }
+
+  function showModal(){ els.modeModal.style.display='flex'; }
+  function hideModal(){ els.modeModal.style.display='none'; }
+  showModal(); preloadOverlay('overlay-couple.png');
+  function choose(n){ preloadOverlay(n); }
+  els.modeCouple.onclick=()=>choose('overlay-couple.png');
+  els.modeShiv.onclick=()=>choose('overlay-shiv.png');
+  els.modeDurga.onclick=()=>choose('overlay-durga.png');
+  els.chooseCouple.onclick=()=>choose('overlay-couple.png');
+  els.chooseShiv.onclick=()=>choose('overlay-shiv.png');
+  els.chooseDurga.onclick=()=>choose('overlay-durga.png');
+  els.noOverlay.onclick=()=>{ overlayImage=null; overlayMaskImage=null; hideModal(); setStatus('Overlay disabled.'); };
+
+  async function refreshDevices(){ try{ devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput'); }catch{ devices=[]; } }
+  function pickDeviceIdForFacing(){
+    if(!devices.length) return null;
+    const isFront=d=>/front|user|selfie/i.test(d.label);
+    const isBack=d=>/back|rear|environment/i.test(d.label);
+    if(facing==='user'){ return (devices.find(isFront)||devices[0])?.deviceId||null; }
+    return (devices.find(isBack)||devices[devices.length-1])?.deviceId||null;
+  }
+
+  async function startCamWith(constraints){
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+    const s=await navigator.mediaDevices.getUserMedia(constraints);
+    els.video.srcObject=s;
+    if(els.showRaw.checked) els.videoBox.style.display='block';
+    await new Promise((resolve)=>{
+      let done=false;
+      const check=()=>{
+        if(els.video.videoWidth>0 && els.video.videoHeight>0){ done=true; resolve(); }
+        else if(!done) setTimeout(check, 80);
+      };
+      els.video.onplaying=()=>{ if(!done){ done=true; resolve(); } };
+      els.video.onloadedmetadata=check;
+      check();
+    });
+    await els.video.play().catch(()=>{});
+    return s;
+  }
+
+  async function startCamera(){
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){ setStatus('Camera API not available. Use Upload Photo.', true); return; }
+    try{
+      setStatus('Requesting camera…'); hasDrawnVideoFrame=false;
+      await refreshDevices(); currentDeviceId=pickDeviceIdForFacing();
+      try{
+        if(currentDeviceId){ stream=await startCamWith({video:{deviceId:{exact:currentDeviceId},width:{ideal:1280},height:{ideal:720}},audio:false}); }
+        else throw 0;
+      }catch{
+        try{ stream=await startCamWith({video:{facingMode:facing,width:{ideal:1280},height:{ideal:720}},audio:false}); }
+        catch{ stream=await startCamWith({video:true,audio:false}); }
+      }
+      usingVideo=true; sourceImage=null; hideModal(); setStatus('Camera started.'); resetTransform();
+      setTimeout(async()=>{
+        if(!hasDrawnVideoFrame){
+          facing=(facing==='user'?'environment':'user');
+          setStatus('No frames yet — retrying camera…', true);
+          await startCamera();
+        }
+      },3000);
+    }catch(e){ console.error(e); setStatus('Camera error: '+(e.message||e), true); usingVideo=false; els.videoBox.style.display='none'; }
+  }
+
+  els.startCam.onclick=startCamera;
+  els.flipCam.onclick=async()=>{ facing=(facing==='user'?'environment':'user'); await startCamera(); };
+  els.stopCam.onclick=()=>{ if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} usingVideo=false; setStatus('Camera stopped.'); els.videoBox.style.display='none'; };
+
+  els.upload.onchange=async e=>{
+    const f=e.target.files?.[0]; if(!f) return;
+    try{ sourceImage=await (new Promise((res,rej)=>{ const url=URL.createObjectURL(f); const img=new Image(); img.onload=()=>{URL.revokeObjectURL(url);res(img)}; img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('load fail'))}; img.src=url; })); usingVideo=false; hideModal(); setStatus('Photo loaded.'); resetTransform(); }
+    catch{ setStatus('Could not open that photo. Try PNG/JPG.', true); }
+  };
+
+  els.resetView.onclick=resetTransform;
+  els.zoomEl.oninput=()=> zoom=parseInt(els.zoomEl.value,10)/100;
+  els.rotateEl.oninput=()=> rotation=parseInt(els.rotateEl.value,10)*Math.PI/180;
+  els.showRaw.onchange=()=>{ if(!els.showRaw.checked) els.videoBox.style.display='none'; };
+
+  let dragging=false,lx=0,ly=0;
+  els.canvas.addEventListener('pointerdown',e=>{dragging=true;lx=e.clientX;ly=e.clientY;els.canvas.setPointerCapture(e.pointerId)});
+  els.canvas.addEventListener('pointerup',e=>{dragging=false;els.canvas.releasePointerCapture(e.pointerId)});
+  els.canvas.addEventListener('pointercancel',()=>dragging=false);
+  els.canvas.addEventListener('pointermove',e=>{ if(!dragging) return; const dx=e.clientX-lx,dy=e.clientY-ly; lx=e.clientX; ly=e.clientY; tx+=dx; ty+=dy; });
+  els.canvas.addEventListener('wheel',e=>{ e.preventDefault(); const f=(e.deltaY<0)?1.05:0.95; zoom=Math.min(3,Math.max(0.5,zoom*f)); els.zoomEl.value=Math.round(zoom*100); },{passive:false});
+
+  function coverFit(sw,sh,dw,dh){ const s=Math.max(dw/sw,dh/sh); return {w:sw*s,h:sh*s}; }
+
+  // Offscreen for masking
+  const offscreen = document.createElement('canvas');
+  const offctx = offscreen.getContext('2d');
+
+  function getMaskFaceBounds(maskImg, W, H){
+    const t = document.createElement('canvas'); t.width=Math.ceil(W); t.height=Math.ceil(H);
+    const tctx = t.getContext('2d'); tctx.drawImage(maskImg, 0, 0, W, H);
+    const img = tctx.getImageData(0,0,t.width,t.height);
+    const data = img.data, width=t.width, height=t.height;
+    let minX=width, minY=height, maxX=-1, maxY=-1, count=0;
+    for(let y=0;y<height;y++){
+      for(let x=0;x<width;x++){
+        const i=(y*width+x)*4; const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
+        if(a>128 && (r+g+b)/3>200){ // white-ish
+          if(x<minX) minX=x; if(y<minY) minY=y; if(x>maxX) maxX=x; if(y>maxY) maxY=y; count++;
+        }
+      }
+    }
+    if(maxX<0) return null;
+    return { x:minX, y:minY, w:maxX-minX+1, h:maxY-minY+1, count };
+  }
+
+  els.fitFace.onclick = ()=>{
+    const dpr=window.devicePixelRatio||1, W=els.canvas.width/dpr, H=els.canvas.height/dpr;
+    if(!overlayMaskImage){ setStatus('No mask found for this overlay. Add a -mask.png file.', true); return; }
+    const b = getMaskFaceBounds(overlayMaskImage, W, H);
+    if(!b){ setStatus('Could not detect a face window in the mask (needs white area).', true); return; }
+    // center on mask center
+    const cx=b.x+b.w/2, cy=b.y+b.h/2;
+    rotation=0; tx = (cx - W/2); ty=(cy - H/2);
+    const targetFill=1.1;
+    const zoomByHeight=(b.h / H) * targetFill;
+    zoom=Math.max(0.5, Math.min(3, zoomByHeight));
+    els.zoomEl.value=Math.round(zoom*100);
+    setStatus('Fitted to face window. Fine-tune with drag/zoom if needed.');
+  };
+
+  // Capture & Download
+  els.snap.onclick = () => {
+    if (!sourceImage && !(usingVideo && els.video.readyState >= 2 && els.video.videoWidth > 0)) {
+      setStatus('Nothing to capture yet — start camera or upload a photo.', true);
+      return;
+    }
+    const overlayTag = (overlayImage && overlayImage.src) ? 
+      (overlayImage.src.split('/').pop().replace('.png','')) : 'no-overlay';
+    const name = `booth_${overlayTag}_${tsName()}.png`;
+    downloadCanvas(els.canvas, name);
+    setStatus('Image captured — check your downloads.');
+  };
+
+  // Diagnostics
+  let lastT=performance.now(), frames=0, fps=0;
+  function tickFPS(){ const now=performance.now(); frames++; if(now-lastT>1000){ fps=frames; frames=0; lastT=now; } }
+
+  function draw(){
+    requestAnimationFrame(draw); tickFPS();
+    const dpr=window.devicePixelRatio||1, ctx=els.ctx, W=els.canvas.width/dpr, H=els.canvas.height/dpr;
+    ctx.clearRect(0,0,W,H); ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+
+    // Offscreen compose
+    offscreen.width=Math.ceil(W*dpr); offscreen.height=Math.ceil(H*dpr);
+    offctx.setTransform(dpr,0,0,dpr,0,0);
+    offctx.clearRect(0,0,W,H);
+
+    // Person layer
+    offctx.save();
+    offctx.translate(W/2+tx, H/2+ty);
+    offctx.rotate(rotation);
+    offctx.scale(zoom*(els.mirror.checked?-1:1), zoom);
+
+    let drewPerson=false;
+    if(usingVideo && els.video.readyState>=2 && els.video.videoWidth>0){
+      const vw=els.video.videoWidth, vh=els.video.videoHeight; const s=coverFit(vw,vh,W,H);
+      offctx.drawImage(els.video, -s.w/2,-s.h/2,s.w,s.h); drewPerson=true; hasDrawnVideoFrame=true; if(els.showRaw.checked) els.videoBox.style.display='none';
+    } else if(sourceImage){
+      const iw=sourceImage.width, ih=sourceImage.height; const s=coverFit(iw,ih,W,H);
+      offctx.drawImage(sourceImage,-s.w/2,-s.h/2,s.w,s.h); drewPerson=true;
+    }
+    offctx.restore();
+
+    // Apply mask (keep only white parts) if present
+    if(overlayMaskImage && drewPerson){
+      offctx.save();
+      offctx.globalCompositeOperation='destination-in';
+      offctx.drawImage(overlayMaskImage, 0,0, W,H);
+      offctx.restore();
+    }
+
+    // Paint composited person onto main canvas
+    ctx.drawImage(offscreen, 0,0, W,H);
+
+    // Overlay art
+    const showOv = (!els.showOverlay || els.showOverlay.checked);
+    if(overlayImage && showOv){
+      const alpha = els.overlayAlpha ? Math.max(0,Math.min(1, parseInt(els.overlayAlpha.value,10)/100)) : 1;
+      ctx.save(); ctx.globalAlpha=alpha; ctx.drawImage(overlayImage, 0,0, W,H); ctx.restore();
+    }
+
+    // Footer
+    ctx.save();
+    ctx.font=Math.max(10,Math.round(W*0.014))+"px ui-monospace,Menlo,Consolas";
+    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.textAlign="center"; ctx.textBaseline="bottom";
+    const pad=Math.max(8,Math.round(W*0.015)); ctx.shadowColor="rgba(0,0,0,0.6)"; ctx.shadowBlur=4; ctx.shadowOffsetY=1;
+    ctx.fillText(FOOTER, W/2, H-pad); ctx.restore();
+
+    // Diag
+    els.diag.textContent=`fps:${fps} size:${Math.round(W)}×${Math.round(H)} ready:${els.video.readyState} vw:${els.video.videoWidth} vh:${els.video.videoHeight} cam:${usingVideo?'on':'off'}`;
+  }
+  draw();
+})();
 </script>
 </body>
 </html>
