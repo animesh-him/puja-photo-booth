@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Puja Photo Booth — Masked (Shiv / Durga / Couple)</title>
+<title>Puja Photo Booth — Masks + Logo</title>
 <style>
   :root{--bg:#0f1020;--panel:#17192e;--muted:#9aa3b2;--text:#f2f5f7;--accent:#ffb703;--ok:#0ea5e9;--warn:#ef4444}
   *{box-sizing:border-box}
@@ -52,11 +52,9 @@
       </div>
       <div class="row">
         <label><input type="checkbox" id="showOverlay" checked/> Show Overlay</label>
-        <label>Opacity <input id="overlayAlpha" type="range" min="0" max="100" value="100"/></label>
+        <label>Opacity <input id="overlayAlpha" type="range" min="0" max="100" value="60"/></label>
         <label><input type="checkbox" id="showRaw" checked/> Show Raw Video until ready</label>
       </div>
-      <div class="note">Place transparent overlays & masks in <code>assets/</code>:
-        <code>overlay-*.png</code> and matching <code>overlay-*-mask.png</code> (white = face window).</div>
 
       <h3>Position</h3>
       <div class="row">
@@ -87,20 +85,6 @@
   </div>
 </div>
 
-<!-- Mode chooser -->
-<div id="modeModal" class="modal" role="dialog" aria-modal="true" aria-label="Choose mode" style="position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:40">
-  <div style="background:#0b1430;border:1px solid #2a3b61;border-radius:16px;padding:18px;max-width:520px;width:92%">
-    <h2 style="margin:0 0 6px 0">Who is in the photo?</h2>
-    <div class="row" style="margin-top:8px">
-      <button id="modeCouple">Couple (Shiv + Durga)</button>
-      <button id="modeShiv">Single (Shiv)</button>
-      <button id="modeDurga">Single (Durga)</button>
-    </div>
-    <p class="note" style="margin-top:10px">Change anytime from Overlay buttons.</p>
-  </div>
-</div>
-
-<!-- Raw video box -->
 <div id="videoBox"><video id="video" playsinline autoplay muted></video></div>
 
 <script>
@@ -125,10 +109,6 @@
     chooseShiv: document.getElementById('chooseShiv'),
     chooseDurga: document.getElementById('chooseDurga'),
     noOverlay: document.getElementById('noOverlay'),
-    modeModal: document.getElementById('modeModal'),
-    modeCouple: document.getElementById('modeCouple'),
-    modeShiv: document.getElementById('modeShiv'),
-    modeDurga: document.getElementById('modeDurga'),
     status: document.getElementById('status'),
     diag: document.getElementById('diag'),
     showOverlay: document.getElementById('showOverlay'),
@@ -139,6 +119,8 @@
   let stream=null, sourceImage=null, overlayImage=null, overlayMaskImage=null, usingVideo=false;
   let devices=[], facing="user", currentDeviceId=null;
   let hasDrawnVideoFrame=false, tx=0, ty=0, zoom=1, rotation=0;
+  let currentOverlayName='overlay-couple.png';
+  let logoImage=null; // drawn only on single overlays
 
   const FOOTER = "Rendered at sole discretion via Online Photo Booth of www.aerospaceparkbengalis.in";
 
@@ -189,11 +171,10 @@
   async function preloadOverlay(fileName){
     try{
       overlayImage = await tryLoad('assets/'+fileName);
-      // attempt mask with -mask.png sibling
+      currentOverlayName = fileName;
       const maskName = fileName.replace(/\.png$/i, '-mask.png');
       try { overlayMaskImage = await tryLoad('assets/'+maskName); }
       catch { overlayMaskImage = null; }
-      hideModal();
       setStatus(`Overlay loaded: ${fileName}${overlayMaskImage?' (mask found)':' (no mask found)'}`);
       resetTransform();
     }catch(e){
@@ -203,17 +184,20 @@
     }
   }
 
-  function showModal(){ els.modeModal.style.display='flex'; }
-  function hideModal(){ els.modeModal.style.display='none'; }
-  showModal(); preloadOverlay('overlay-couple.png');
+  async function loadLogo(){
+    try{ logoImage = await tryLoad('assets/logo.png'); }
+    catch { logoImage=null; }
+  }
+  loadLogo();
+
   function choose(n){ preloadOverlay(n); }
-  els.modeCouple.onclick=()=>choose('overlay-couple.png');
-  els.modeShiv.onclick=()=>choose('overlay-shiv.png');
-  els.modeDurga.onclick=()=>choose('overlay-durga.png');
   els.chooseCouple.onclick=()=>choose('overlay-couple.png');
   els.chooseShiv.onclick=()=>choose('overlay-shiv.png');
   els.chooseDurga.onclick=()=>choose('overlay-durga.png');
-  els.noOverlay.onclick=()=>{ overlayImage=null; overlayMaskImage=null; hideModal(); setStatus('Overlay disabled.'); };
+  els.noOverlay.onclick=()=>{ overlayImage=null; overlayMaskImage=null; setStatus('Overlay disabled.'); };
+
+  // default
+  choose('overlay-couple.png');
 
   async function refreshDevices(){ try{ devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput'); }catch{ devices=[]; } }
   function pickDeviceIdForFacing(){
@@ -255,7 +239,7 @@
         try{ stream=await startCamWith({video:{facingMode:facing,width:{ideal:1280},height:{ideal:720}},audio:false}); }
         catch{ stream=await startCamWith({video:true,audio:false}); }
       }
-      usingVideo=true; sourceImage=null; hideModal(); setStatus('Camera started.'); resetTransform();
+      usingVideo=true; sourceImage=null; setStatus('Camera started.'); resetTransform(); try{document.getElementById('overlayAlpha').value=60;}catch{}
       setTimeout(async()=>{
         if(!hasDrawnVideoFrame){
           facing=(facing==='user'?'environment':'user');
@@ -272,7 +256,7 @@
 
   els.upload.onchange=async e=>{
     const f=e.target.files?.[0]; if(!f) return;
-    try{ sourceImage=await (new Promise((res,rej)=>{ const url=URL.createObjectURL(f); const img=new Image(); img.onload=()=>{URL.revokeObjectURL(url);res(img)}; img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('load fail'))}; img.src=url; })); usingVideo=false; hideModal(); setStatus('Photo loaded.'); resetTransform(); }
+    try{ sourceImage=await (new Promise((res,rej)=>{ const url=URL.createObjectURL(f); const img=new Image(); img.onload=()=>{URL.revokeObjectURL(url);res(img)}; img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('load fail'))}; img.src=url; })); usingVideo=false; setStatus('Photo loaded.'); resetTransform(); }
     catch{ setStatus('Could not open that photo. Try PNG/JPG.', true); }
   };
 
@@ -281,6 +265,7 @@
   els.rotateEl.oninput=()=> rotation=parseInt(els.rotateEl.value,10)*Math.PI/180;
   els.showRaw.onchange=()=>{ if(!els.showRaw.checked) els.videoBox.style.display='none'; };
 
+  // pointer interactions to move person layer
   let dragging=false,lx=0,ly=0;
   els.canvas.addEventListener('pointerdown',e=>{dragging=true;lx=e.clientX;ly=e.clientY;els.canvas.setPointerCapture(e.pointerId)});
   els.canvas.addEventListener('pointerup',e=>{dragging=false;els.canvas.releasePointerCapture(e.pointerId)});
@@ -303,7 +288,7 @@
     for(let y=0;y<height;y++){
       for(let x=0;x<width;x++){
         const i=(y*width+x)*4; const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
-        if(a>128 && (r+g+b)/3>200){ // white-ish
+        if(a>128 && (r+g+b)/3>200){ 
           if(x<minX) minX=x; if(y<minY) minY=y; if(x>maxX) maxX=x; if(y>maxY) maxY=y; count++;
         }
       }
@@ -317,7 +302,6 @@
     if(!overlayMaskImage){ setStatus('No mask found for this overlay. Add a -mask.png file.', true); return; }
     const b = getMaskFaceBounds(overlayMaskImage, W, H);
     if(!b){ setStatus('Could not detect a face window in the mask (needs white area).', true); return; }
-    // center on mask center
     const cx=b.x+b.w/2, cy=b.y+b.h/2;
     rotation=0; tx = (cx - W/2); ty=(cy - H/2);
     const targetFill=1.1;
@@ -370,7 +354,7 @@
     }
     offctx.restore();
 
-    // Apply mask (keep only white parts) if present
+    // Apply mask if present
     if(overlayMaskImage && drewPerson){
       offctx.save();
       offctx.globalCompositeOperation='destination-in';
@@ -386,6 +370,17 @@
     if(overlayImage && showOv){
       const alpha = els.overlayAlpha ? Math.max(0,Math.min(1, parseInt(els.overlayAlpha.value,10)/100)) : 1;
       ctx.save(); ctx.globalAlpha=alpha; ctx.drawImage(overlayImage, 0,0, W,H); ctx.restore();
+    }
+
+    // Conditional logo (only for single overlays)
+    if(logoImage && (currentOverlayName==='overlay-shiv.png' || currentOverlayName==='overlay-durga.png')){
+      const logoW = W * 0.16; // ~16% width
+      const aspect = logoImage.width / logoImage.height;
+      const logoH = logoW / aspect;
+      const margin = Math.max(8, W*0.02);
+      const x = W - margin - logoW;
+      const y = H - margin - logoH - (W*0.03); // above footer
+      ctx.drawImage(logoImage, x, y, logoW, logoH);
     }
 
     // Footer
